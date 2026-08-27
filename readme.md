@@ -33,13 +33,13 @@ YYYYMMDDHHmmss
 For example:
 
 ```text
-20260827053715
+20260823195706
 ```
 
 corresponds to:
 
 ```text
-2026-08-27 05:37:15 GMT+8
+2026-08-23 19:57:06 GMT+8
 ```
 
 Each Release contains:
@@ -63,7 +63,7 @@ https://github.com/OrdChaos/RIME-LMDG.snapshot/releases/download/<snapshot>/wanx
 For example:
 
 ```text
-https://github.com/OrdChaos/RIME-LMDG.snapshot/releases/download/20260827053715/wanxiang-lts-zh-hans.gram
+https://github.com/OrdChaos/RIME-LMDG.snapshot/releases/download/20260823195706/wanxiang-lts-zh-hans.gram
 ```
 
 Consumers should pin both the snapshot tag and the expected cryptographic hash.
