@@ -1,4 +1,4 @@
-name: Snapshot Wanxiang Gram
+name: Wanxiang Gram Snapshot
 
 on:
   workflow_dispatch:
