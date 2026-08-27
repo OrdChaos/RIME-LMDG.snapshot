@@ -57,13 +57,13 @@ If the upstream model has not changed, no new snapshot is created.
 A snapshot can be downloaded using its immutable Release URL:
 
 ```text
-https://github.com/<owner>/<repository>/releases/download/<snapshot>/wanxiang-lts-zh-hans.gram
+https://github.com/OrdChaos/RIME-LMDG.snapshot/releases/download/<snapshot>/wanxiang-lts-zh-hans.gram
 ```
 
 For example:
 
 ```text
-https://github.com/<owner>/<repository>/releases/download/20260827053715/wanxiang-lts-zh-hans.gram
+https://github.com/OrdChaos/RIME-LMDG.snapshot/releases/download/20260827053715/wanxiang-lts-zh-hans.gram
 ```
 
 Consumers should pin both the snapshot tag and the expected cryptographic hash.
