@@ -1,0 +1,262 @@
+name: Snapshot Wanxiang Gram
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "17 4 * * *"
+      timezone: "Asia/Shanghai"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: snapshot-wanxiang-gram
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: amzxyz/RIME-LMDG
+  UPSTREAM_TAG: LTS
+  ASSET_NAME: wanxiang-lts-zh-hans.gram
+
+jobs:
+  snapshot:
+    name: Snapshot upstream model
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get upstream asset metadata
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RELEASE_JSON="$(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${UPSTREAM_REPO}/releases/tags/${UPSTREAM_TAG}"
+          )"
+
+          ASSET_JSON="$(
+            jq -c \
+              --arg name "$ASSET_NAME" \
+              '.assets[] | select(.name == $name)' \
+              <<< "$RELEASE_JSON"
+          )"
+
+          if [[ -z "$ASSET_JSON" ]]; then
+            echo "::error::Asset '$ASSET_NAME' not found in ${UPSTREAM_REPO} release '${UPSTREAM_TAG}'."
+            exit 1
+          fi
+
+          ASSET_URL="$(jq -r '.browser_download_url' <<< "$ASSET_JSON")"
+          ASSET_UPDATED_AT="$(jq -r '.updated_at' <<< "$ASSET_JSON")"
+          ASSET_DIGEST="$(jq -r '.digest // empty' <<< "$ASSET_JSON")"
+          ASSET_SIZE="$(jq -r '.size' <<< "$ASSET_JSON")"
+
+          if [[ -z "$ASSET_URL" || "$ASSET_URL" == "null" ]]; then
+            echo "::error::Upstream asset has no download URL."
+            exit 1
+          fi
+
+          if [[ -z "$ASSET_UPDATED_AT" || "$ASSET_UPDATED_AT" == "null" ]]; then
+            echo "::error::Upstream asset has no updated_at timestamp."
+            exit 1
+          fi
+
+          # GitHub timestamps are UTC.
+          # Snapshot tags use the upstream asset update time converted to GMT+8.
+          RELEASE_TAG="$(
+            TZ=Asia/Shanghai \
+              date \
+                --date="$ASSET_UPDATED_AT" \
+                '+%Y%m%d%H%M%S'
+          )"
+
+          {
+            echo "asset_url=$ASSET_URL"
+            echo "asset_updated_at=$ASSET_UPDATED_AT"
+            echo "asset_digest=$ASSET_DIGEST"
+            echo "asset_size=$ASSET_SIZE"
+            echo "release_tag=$RELEASE_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Upstream asset metadata:"
+          echo "  name:       $ASSET_NAME"
+          echo "  updated_at: $ASSET_UPDATED_AT"
+          echo "  digest:     ${ASSET_DIGEST:-unavailable}"
+          echo "  size:       $ASSET_SIZE"
+          echo "  tag:        $RELEASE_TAG"
+
+      - name: Check whether snapshot already exists
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.upstream.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Snapshot '$RELEASE_TAG' already exists."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Snapshot '$RELEASE_TAG' does not exist yet."
+          fi
+
+      - name: Download upstream model
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          ASSET_URL: ${{ steps.upstream.outputs.asset_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl \
+            --fail \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            --output "$ASSET_NAME" \
+            "$ASSET_URL"
+
+          if [[ ! -s "$ASSET_NAME" ]]; then
+            echo "::error::Downloaded model is empty."
+            exit 1
+          fi
+
+      - name: Verify model
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          EXPECTED_DIGEST: ${{ steps.upstream.outputs.asset_digest }}
+          EXPECTED_SIZE: ${{ steps.upstream.outputs.asset_size }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ACTUAL_SIZE="$(stat -c '%s' "$ASSET_NAME")"
+
+          if [[ "$ACTUAL_SIZE" != "$EXPECTED_SIZE" ]]; then
+            echo "::error::File size mismatch."
+            echo "::error::Expected: $EXPECTED_SIZE"
+            echo "::error::Actual:   $ACTUAL_SIZE"
+            exit 1
+          fi
+
+          ACTUAL_SHA256="$(sha256sum "$ASSET_NAME" | awk '{print $1}')"
+
+          if [[ -n "$EXPECTED_DIGEST" ]]; then
+            EXPECTED_SHA256="${EXPECTED_DIGEST#sha256:}"
+
+            if [[ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]]; then
+              echo "::error::SHA-256 mismatch."
+              echo "::error::Expected: $EXPECTED_SHA256"
+              echo "::error::Actual:   $ACTUAL_SHA256"
+              exit 1
+            fi
+          else
+            echo "::warning::GitHub did not provide an asset digest; only local SHA-256 was calculated."
+          fi
+
+          echo "Verified SHA-256: $ACTUAL_SHA256"
+
+          echo "WANXIANG_GRAM_SHA256=$ACTUAL_SHA256" >> "$GITHUB_ENV"
+
+      - name: Create release notes
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          RELEASE_TAG: ${{ steps.upstream.outputs.release_tag }}
+          UPSTREAM_UPDATED_AT: ${{ steps.upstream.outputs.asset_updated_at }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > release-notes.md <<EOF
+          Snapshot of the Wanxiang LTS grammar model.
+
+          - Upstream repository: https://github.com/${UPSTREAM_REPO}
+          - Upstream release: https://github.com/${UPSTREAM_REPO}/releases/tag/${UPSTREAM_TAG}
+          - Upstream asset: \`${ASSET_NAME}\`
+          - Upstream asset timestamp: \`${UPSTREAM_UPDATED_AT}\`
+          - Snapshot tag: \`${RELEASE_TAG}\`
+          - SHA-256: \`${WANXIANG_GRAM_SHA256}\`
+
+          This is an unmodified archival snapshot of the upstream model.
+
+          The Wanxiang grammar model is distributed by its upstream authors under the
+          Creative Commons Attribution 4.0 International license (CC BY 4.0):
+
+          https://creativecommons.org/licenses/by/4.0/
+
+          This repository does not claim authorship of or relicense the archived model.
+          EOF
+
+      - name: Publish snapshot release
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.upstream.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release create "$RELEASE_TAG" \
+            "$ASSET_NAME" \
+            --title "$RELEASE_TAG" \
+            --notes-file release-notes.md \
+            --latest=false
+
+          echo "Published snapshot: $RELEASE_TAG"
+
+
+  heartbeat:
+    name: Repository heartbeat
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether heartbeat is needed
+        id: heartbeat
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NOW="$(date -u +%s)"
+          LAST_COMMIT="$(git log -1 --format=%ct)"
+
+          AGE_SECONDS="$(( NOW - LAST_COMMIT ))"
+          AGE_DAYS="$(( AGE_SECONDS / 86400 ))"
+
+          echo "Last repository commit was ${AGE_DAYS} days ago."
+
+          if (( AGE_DAYS >= 45 )); then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "Heartbeat is required."
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Heartbeat is not required."
+          fi
+
+      - name: Update heartbeat
+        if: steps.heartbeat.outputs.needed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p .github
+
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > .github/heartbeat
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add .github/heartbeat
+          git commit -m "chore: repository heartbeat"
+          git push
